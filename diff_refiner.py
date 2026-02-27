@@ -24,7 +24,7 @@ from skimage.metrics import structural_similarity as compare_ssim
 
 import lpips
 from stage_1 import ResidualPredictionNet,de_normalize
-from data_setup_final import set_seed, create_dataloader, train_dir, val_dir, test_dir, root_dir, device
+from data_setup import set_seed, create_dataloader, train_dir, val_dir, test_dir, root_dir, device
 
 torch.cuda.empty_cache()
 
@@ -659,7 +659,7 @@ class MetricsLogger:
     """
     A utility class to log training and validation metrics to a single CSV file.
     """
-    def __init__(self, log_path='ab_refine_lits_35/metrics_log.csv'):
+    def __init__(self, log_path='Output_Dir/metrics_log.csv'):
         """
         Initializes the logger.
         Args:
@@ -1268,10 +1268,10 @@ if __name__ == '__main__':
         "time_emb_dim": 128, 
         "emb_dim": 512,       # Must match ReportEncoder output
         "out_emb_dim": 512,  # Dimension for cross-attention
-        "stage1_model_path": "/home/m24ma2010/my_model/training_output_s1_tr3/stage1_best_model.pth", 
-        "output_dir": "ab_refine_lits_35",  # Directory to save outputs
-        "log_path": "ab_refine_lits_35/metrics_log_s2.csv",
-        "save_path": "ab_refine_lits_35/stage2_model_final.pth"
+        "stage1_model_path": "/PATH/TO/TRAINED/STAGE_1", 
+        "output_dir": "Output_Dir",  # Directory to save outputs
+        "log_path": "Output_Dir/metrics_log_s2.csv",
+        "save_path": "Output_Dir/stage2_model_final.pth"
     }
     os.makedirs(config['output_dir'], exist_ok=True)
 
@@ -1366,29 +1366,5 @@ if __name__ == '__main__':
         csv_path=config['log_path'], 
         output_dir=config['output_dir']
     )
-
-    # --- 7. Run Final Evaluation on Test Set ---
-    # print("\n--- Running final evaluation on the test set ---")
-    # evaluate_on_test_set(
-    #     test_dataloader=test_dataloader,
-    #     stage2_model=model,
-    #     med_gemma_model=med_gemma_model,
-    #     noise_scheduler=noise_scheduler,
-    #     device=device,
-    #     lpips_loss_fn=lpips_loss_fn,
-    #     output_dir=config['output_dir']
-    # )
-
-    # # --- 8. Generate Final Visualizations from Test Set ---
-    # print("\n--- Generating final visualizations from the test set ---")
-    # generate_and_save_test_visualizations(
-    #     test_dataloader=test_dataloader,
-    #     stage2_model=model,
-    #     med_gemma_model=med_gemma_model,
-    #     noise_scheduler=noise_scheduler,
-    #     device=device,
-    #     num_samples=5,
-    #     output_dir=config['output_dir']
-    # )
     
     print("\n--- Pipeline Complete ---")
