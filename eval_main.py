@@ -14,7 +14,7 @@ from skimage.metrics import structural_similarity as compare_ssim
 from typing import List, Tuple
 import lpips
 import pywt
-from image_saver import save_images_to_directories , process_and_save_with_fusion
+from image_fusion import save_images_to_directories , process_and_save_with_fusion
 import time
 
 os.environ['PYTORCH_NVML_BASED_CUDA_CHECK'] = '0'
@@ -26,8 +26,8 @@ import shutil
 from PIL import Image
 # Import your modules
 from stage_1 import ResidualPredictionNet
-from data_setup_final import set_seed, create_dataloader, device
-from c_ab_refine import Stage2Model, NoiseScheduler ,normalize_noise
+from data_setup import set_seed, create_dataloader, device
+from diff_refiner import Stage2Model, NoiseScheduler ,normalize_noise
 
 class DDIMSampler:
     """
@@ -712,20 +712,19 @@ def evaluate_stage2_model(config):
 
 if __name__ == '__main__':
     evaluation_config = {
-        'model_path': '/home/m24ma2010/my_model/ab_refine/best_model.pth',
-        'stage1_model_path': '/home/m24ma2010/my_model/training_output_s1_tr3/stage1_best_model.pth',
-        'test_csv_path': '/home/m24ma2010/my_model/liver_ct_sort.csv',
-        # 'test_csv_path': '/home/m24ma2010/Kits/test_data.csv',
+        'model_path': '/PATH/TO/TRAINED/DIFFUSION/MODEL',
+        'stage1_model_path': '/PATH/TO/TRAINED/STAGE_1/MODEL',
+        'test_csv_path': '/PATH/TO/CSV/FILE/CONTAINING/IMAGE/PATHS',
         'time_emb_dim': 128,
         'out_emb_dim': 512,
         'eval_batch_size': 8,
         'num_train_timesteps': 1000,  # Full scheduler range
-        'num_inference_steps': 3,     # Number of denoising steps (adjust as needed)
-        'max_noise_timestep': 132,  # Can be adjusted (5, 10, 15, 20, etc.)
+        'num_inference_steps': 2,     # Number of denoising steps (adjust as needed)
+        'max_noise_timestep': 98,  # Can be adjusted (5, 10, 15, 20, etc.)
         'max_test_items': None,  # Set to None for full evaluation
         'evaluation_seed': 42,
         'num_visualizations': 10,
-        'evaluation_output_dir': 'evaluation_refine/lits_images' # Change this to your desired output directory
+        'evaluation_output_dir': '/PATH/TO/OUTPUT/DIRECTORY'
     }
     
     evaluate_stage2_model(evaluation_config)
