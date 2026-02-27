@@ -1217,9 +1217,9 @@ def plot_metrics_from_csv(csv_path, output_dir):
     # The key is the plot title/Y-axis label, the value is the column name in the CSV.
     metrics_to_plot = {
         "Total Loss": "total_loss",
-        "Diffusion Loss": "diffusion_loss",  # <--- ADDED
-        "LPIPS Loss": "lpips_loss",          # <--- ADDED
-        "Reconstruction Loss": "recon_loss",     # <--- ADDED
+        "Diffusion Loss": "diffusion_loss", 
+        "LPIPS Loss": "lpips_loss",          
+        "Reconstruction Loss": "recon_loss",    
         "Frequency Loss": "freq_loss",
         "PSNR (dB)": "psnr",
         "SSIM": "ssim",
@@ -1392,11 +1392,3 @@ if __name__ == '__main__':
     # )
     
     print("\n--- Pipeline Complete ---")
-
-
-# o_swin - lpips - 0.5 , char - 0.25, freq - 0.0      .85 ( size - 21 M) depth = 1,2,2,2,1     ab_test
-# o_swin_2 - lpips - 0.35 , char - 0.35, freq - 0.0                                             ab_test_2
- 
-# o_swin_3 -  lpips - 0.5 , char - 0.25, freq - 0.0   --- depth = 1,1,2,1,1                ab_test_3     .55
-# o_swin_5 -  lpips - 0.4 , char - 0.4, freq - 0.0   --- depth = 1,2,4,1,1                ab_test_5    .55
-# o_swin_6 -  lpips - 0.4 , char - 0.4, freq - 0.0   --- depth = 1,1,4,1,1                ab_test_5    .55
