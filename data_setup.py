@@ -18,7 +18,7 @@ torch.cuda.empty_cache()
 train_dir = '/DATA2/lits/train_lits'
 val_dir = '/DATA2/lits/val_lits'
 test_dir = '/DATA2/lits/test_lits'
-root_dir = 'home/m24ma2010/my_model'
+root_dir = 'Root_Dir'
 
 # Set Device
 device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
