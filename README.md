@@ -24,7 +24,7 @@ To reproduce our results or run inference on your own samples, you must download
 | :--- | :--- | :--- |
 | **Stage 1 Weights** | Residual Prediction Network  | [**Download from Drive**](https://drive.google.com/drive/folders/1u6-fXL2NzYhwzQNKZdF1fkxE8thxD_pB?usp=sharing) |
 | **Stage 2 Weights** | Diffusion Refinement Model | [**Download from Drive**](https://drive.google.com/drive/folders/1u6-fXL2NzYhwzQNKZdF1fkxE8thxD_pB?usp=sharing) |
-| **Testing Data** | Normalized CT Patches (LITS/KITS) & Metadata | [**Download from Drive**](https://drive.google.com/drive/folders/1u6-fXL2NzYhwzQNKZdF1fkxE8thxD_pB?usp=sharing) |
+| **Testing Data** | 2D Sliced Data for Inference | [**Download from Drive**](https://drive.google.com/drive/folders/1u6-fXL2NzYhwzQNKZdF1fkxE8thxD_pB?usp=sharing) |
 
 ### Data Preparation
 The system utilizes a CSV-based loading mechanism. You must provide a `.csv` file containing the absolute paths to each CT scan slice.
@@ -33,7 +33,7 @@ The system utilizes a CSV-based loading mechanism. You must provide a `.csv` fil
 The CSV file should have a column named `image_path` as shown below:
 
 | image_path |
-C
+| :--- |
 | `/DATA/lits/test_lits/patient_31/slice_90.png` |
 | `/DATA/lits/test_lits/patient_128/slice_100.png` |
 
