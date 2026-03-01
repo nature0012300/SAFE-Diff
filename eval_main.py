@@ -14,8 +14,9 @@ from skimage.metrics import structural_similarity as compare_ssim
 from typing import List, Tuple
 import lpips
 import pywt
-from image_fusion import save_images_to_directories , process_and_save_with_fusion
+from image_fusion import process_and_save_with_fusion
 import time
+import hashlib
 
 os.environ['PYTORCH_NVML_BASED_CUDA_CHECK'] = '0'
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
@@ -24,15 +25,14 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512,expandable_segmen
 from pytorch_fid import fid_score
 import shutil
 from PIL import Image
-# Import your modules
+
 from stage_1 import ResidualPredictionNet
 from data_setup import set_seed, create_dataloader, device
-from diff_refiner import Stage2Model, NoiseScheduler ,normalize_noise
+from diff_refiner import Stage2Model, NoiseScheduler 
 
 class DDIMSampler:
     """
-    DDIM sampler optimized for residual-based inference.
-    Works with residual maps instead of full images.
+    DDIM sampler optimized for  inference.
     """
     def __init__(self, noise_scheduler, num_train_timesteps, num_inference_steps,max_noise_timestep):
         self.noise_scheduler = noise_scheduler
@@ -41,21 +41,20 @@ class DDIMSampler:
         self.max_noise_timestep = max_noise_timestep
         
         # Create the inference timestep schedule (DDIM style)
-        step_ratio = (self.max_noise_timestep + 1) // self.num_inference_steps
-        self.timesteps = (np.arange(0, num_inference_steps) * step_ratio).round()[::-1].copy().astype(np.int64)
+        step_ratio = self.max_noise_timestep // self.num_inference_steps
+        self.timesteps = (np.arange(1, num_inference_steps + 1) * step_ratio).round()[::-1].copy().astype(np.int64)
         self.timesteps = torch.from_numpy(self.timesteps)
-
+        
+        trajectory = self.timesteps.tolist() + [0]
+        print(f"DDIM Timestep Trajectory ({self.num_inference_steps} steps): {' → '.join(map(str, trajectory))}")
+    
     def _get_previous_timestep(self, timestep: int) -> int:
-        """Calculate previous timestep based on inference schedule."""
-        step_ratio = self.num_train_timesteps // self.num_inference_steps
+        step_ratio = self.max_noise_timestep // self.num_inference_steps  
         prev_t = timestep - step_ratio
         return prev_t
 
     def sample_residual(self, model, downsampled_image, device, generator=None):
-        """
-        Sample residual map using DDIM, following the training paradigm exactly.
-        Start with Stage 1 residual + noise using the noise scheduler.
-        """
+        
         batch_size = downsampled_image.shape[0]
         
         # Step 1: Get Stage 1 prediction (coarse HR)
@@ -70,30 +69,22 @@ class DDIMSampler:
                 stage1_residual = model.stage1_model(upsampled_image)
             coarse_hr = torch.clamp(upsampled_image + stage1_residual, -1.0, 1.0)
         
-        # Step 2: Add noise to Stage 1 residual using noise scheduler (same as training)
-        initial_timestep = torch.full((batch_size,), self.max_noise_timestep, device=device) # Start with maximum noise (199 for 200-step scheduler)
+        # Step 2: Add noise to coarse hr  using noise scheduler (same as training)
+        initial_timestep = torch.full((batch_size,), self.max_noise_timestep, device=device, dtype=torch.long) # Start with maximum noise (199 for 200-step scheduler)
         pure_noise = torch.randn(coarse_hr.shape, generator=generator, device=device)
-        # gaussian_noise = torch.randn(coarse_hr.shape, generator=generator, device=device)
-        # # # Element-wise multiplication with residual map
-        # blended_noise = 0.7 * gaussian_noise + 0.3 * (gaussian_noise * torch.abs(stage1_residual))
-        # # # Normalize the modulated noise to maintain Gaussian properties
-        # pure_noise = normalize_noise(blended_noise, target_std=1.0)
-        # Use noise scheduler to add proper noise (exactly like training)
+    
         initial_noisy_hr = self.noise_scheduler.add_noise(coarse_hr, pure_noise, initial_timestep)
         current_sample = initial_noisy_hr.clone()
         
-        print(f"Initial noisy residual: min={current_sample.min():.4f}, max={current_sample.max():.4f}")
-        print(f"Stage 1 residual: min={stage1_residual.min():.4f}, max={stage1_residual.max():.4f}")
         
         model.eval()
         with torch.no_grad():
             for step_idx, t in enumerate(tqdm(self.timesteps, desc="DDIM Sampling HR Image")):
                 t_tensor = torch.full((batch_size,), t.item(), device=device, dtype=torch.long)
                 
-                # U-Net input: [current_noisy_residual, coarse_hr] (2 channels)
-                # This matches training where input was [noisy_hr_image, coarse_hr]
+               
                 predicted_noise = model(
-                    noisy_hr_image=current_sample,  # Pass noisy residual directly
+                    noisy_hr_image=current_sample,  
                     downsampled_image=downsampled_image,
                     time_steps=t_tensor,
                     residual_map=stage1_residual
@@ -101,14 +92,14 @@ class DDIMSampler:
                 
                 print(f"Step {step_idx}: t={t.item()}, noise range=[{predicted_noise.min():.4f}, {predicted_noise.max():.4f}]")
                 
-                # DDIM step to get previous residual
+                # DDIM step 
                 current_sample = self._ddim_step(
                     t.item(), current_sample, predicted_noise, 
                     eta=0.0,  # Deterministic DDIM - best for super-resolution
                     is_final_step=(step_idx == len(self.timesteps) - 1)
                 )
         
-        # Final reconstructed HR = coarse HR + denoised residual
+        # Final reconstructed HR 
         final_hr = torch.clamp(current_sample, -1.0, 1.0)
         
         return final_hr, coarse_hr, stage1_residual, current_sample, initial_noisy_hr
@@ -164,51 +155,6 @@ class DDIMSampler:
         
         # --- 7. Downcast the final result before returning ---
         return prev_residual.to(original_dtype)
-    
-    def add_noise(self, x_0, noise, t):
-        """Add noise to residual maps (same as training)."""
-        sqrt_alpha_cumprod_t = torch.sqrt(self.alphas_cumprod[t]).view(-1, 1, 1, 1).to(x_0.device)
-        sqrt_one_minus_alpha_cumprod_t = torch.sqrt(1.0 - self.alphas_cumprod[t]).view(-1, 1, 1, 1).to(x_0.device)
-        return sqrt_alpha_cumprod_t * x_0 + sqrt_one_minus_alpha_cumprod_t * noise
-
-# class ResidualNoiseScheduler:
-#     """
-#     Specialized noise scheduler for residual-based training/inference.
-#     Uses only 200 steps as per your training setup.
-#     """
-#     def __init__(self, num_timesteps=200, beta_start=0.0001, beta_end=0.015, device=device):
-#         self.num_timesteps = num_timesteps
-#         self.device = device
-        
-#         # Generate cosine schedule
-#         self.betas = self.cosine_beta_schedule(num_timesteps, beta_start, beta_end).to(device)
-#         self.alphas = 1.0 - self.betas
-#         self.alphas_cumprod = torch.cumprod(self.alphas, dim=0).to(device)
-    
-#     def cosine_beta_schedule(self, timesteps, beta_start, beta_end, s=0.008):
-#         """Creates a cosine schedule for beta values."""
-#         steps = timesteps + 1
-#         x = torch.linspace(0, timesteps, steps, dtype=torch.float32)
-        
-#         # Cosine schedule for alphas_cumprod
-#         alphas_cumprod = torch.cos(((x / timesteps) + s) / (1 + s) * torch.pi * 0.5) ** 2
-#         alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
-        
-#         # Calculate betas from alphas_cumprod
-#         betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
-        
-#         # Clip betas to reasonable range
-#         betas = torch.clip(betas, beta_start, beta_end)
-        
-#         return betas
-
-# if original_hr.shape[1] == 1:  # Single channel
-#     original_hr_rgb = original_hr.repeat(1, 3, 1, 1)  # Replicate to 3 channels
-#     final_hr_rgb = final_hr.repeat(1, 3, 1, 1)
-#     lpips_scores = lpips_loss_fn(original_hr_rgb, final_hr_rgb).squeeze().cpu().tolist()
-# else:
-#     lpips_scores = lpips_loss_fn(original_hr, final_hr).squeeze().cpu().tolist()
-    
     
 def calculate_fid_batch(original_images, predicted_images, output_dir, device):
     """Calculate FID for collected images"""
@@ -310,7 +256,8 @@ def load_trained_model(model_path, config, device):
         
         print(f"\n[2/3] Loading Stage 2 weights (filtered out {len(checkpoint) - len(stage2_only_checkpoint)} Stage 1 keys)")
         loaded = model.load_state_dict(stage2_only_checkpoint, strict=False)
-        
+        print(f"Missing keys: {loaded.missing_keys}")
+        print(f"Unexpected keys: {loaded.unexpected_keys}")
         # Step 3: **CRITICAL** - Reload Stage 1 to ensure correct weights
         print(f"\n[3/3] Reloading Stage 1 model from: {config['stage1_model_path']}")
         
@@ -340,7 +287,7 @@ def load_trained_model(model_path, config, device):
         print(f"  - Test output range: [{test_residual.min():.4f}, {test_residual.max():.4f}]")
         
         # Compute weight hash for verification
-        import hashlib
+
         stage1_hash = hashlib.md5(
             torch.cat([p.flatten() for p in model.stage1_model.parameters()]).cpu().numpy().tobytes()
         ).hexdigest()[:8]
@@ -362,7 +309,7 @@ def create_evaluation_visualizations(original_batch, reconstructed_batch, input_
                                    initial_noisy_hr_batch, batch_metrics, save_path, batch_idx):
     """Create comprehensive visualizations showing the complete residual-based pipeline."""
     batch_size = min(original_batch.shape[0], 2)
-    fig, axes = plt.subplots(batch_size, 8, figsize=(40, 5 * batch_size + 1))  # 8 columns now
+    fig, axes = plt.subplots(batch_size, 7, figsize=(40, 5 * batch_size + 1))  # 8 columns now
     if batch_size == 1: 
         axes = axes.reshape(1, -1)
     
@@ -377,12 +324,11 @@ def create_evaluation_visualizations(original_batch, reconstructed_batch, input_
         initial_noisy_hr_np = ((initial_noisy_hr_batch[i, 0].cpu() + 1) / 2).clamp(0, 1).numpy()
         diff_map = np.abs(original_np - reconstructed_np)
         
-        # Plot the complete pipeline with noisy residual
+        # Plot the complete pipeline 
         axes[i, 0].imshow(input_np, cmap='gray'); axes[i, 0].set_title("Input (Upsampled LR)"); axes[i, 0].axis('off')
         axes[i, 1].imshow(stage1_residual_np, cmap='gray'); axes[i, 1].set_title("Stage 1 Residual (Clean)"); axes[i, 1].axis('off')
         axes[i, 2].imshow(initial_noisy_hr_np, cmap='gray'); axes[i, 2].set_title("Initial Noisy hr "); axes[i, 2].axis('off')
         axes[i, 3].imshow(coarse_hr_np, cmap='gray'); axes[i, 3].set_title("Coarse HR (Stage 1)"); axes[i, 3].axis('off')
-        # axes[i, 4].imshow(current_sample_np, cmap='gray'); axes[i, 4].set_title("Denoised Image (Stage 2)"); axes[i, 4].axis('off')
         axes[i, 4].imshow(reconstructed_np, cmap='gray'); axes[i, 4].set_title("Final HR"); axes[i, 4].axis('off')
         axes[i, 5].imshow(original_np, cmap='gray'); axes[i, 5].set_title("Ground Truth HR"); axes[i, 5].axis('off')
         axes[i, 6].imshow(diff_map, cmap='hot'); axes[i, 6].set_title("Difference Map"); axes[i, 6].axis('off')
@@ -441,7 +387,7 @@ def create_metrics_plots(all_metrics, output_dir):
 
 def evaluate_stage2_model(config):
     """
-    Main evaluation function for Stage 2 model with corrected residual-based inference.
+    Main evaluation function for Stage 2 model  inference.
     """
     print("=" * 60)
     print("STAGE 2 MODEL EVALUATION - INFERENCE")
@@ -479,7 +425,6 @@ def evaluate_stage2_model(config):
     print("\n" + "="*60)
     print("STAGE 1 WEIGHT VERIFICATION")
     print("="*60)
-    import hashlib
     weight_bytes = torch.cat([p.flatten() for p in model.stage1_model.parameters()]).cpu().numpy().tobytes()
     weight_hash = hashlib.md5(weight_bytes).hexdigest()[:16]
     print(f"Stage 1 weight hash: {weight_hash}")
@@ -488,9 +433,13 @@ def evaluate_stage2_model(config):
 
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
-    print("\n[STEP 3/6] Initializing residual-based sampler...")
-    noise_scheduler = NoiseScheduler(num_timesteps=evaluation_config['num_train_timesteps'], device=device)
+    print("\n[STEP 3/6] Initializing  sampler...")
+    noise_scheduler = NoiseScheduler(num_timesteps=config['num_train_timesteps'], device=device)
     sampler = DDIMSampler(noise_scheduler, num_train_timesteps=config['num_train_timesteps'], num_inference_steps=config['num_inference_steps'],max_noise_timestep=config['max_noise_timestep'] )
+    print(sampler.timesteps.tolist())
+    print(sampler._get_previous_timestep(132))
+    print(sampler._get_previous_timestep(88))
+    print(sampler._get_previous_timestep(44))
     lpips_loss_fn = lpips.LPIPS(net='alex').to(device)
     
     all_metrics = {
@@ -514,7 +463,7 @@ def evaluate_stage2_model(config):
     warmup_batches = 2
 
     with torch.no_grad():
-        for batch_idx, (original_hr, downsampled_lr, _, report_texts) in enumerate(test_dataloader):
+        for batch_idx, (original_hr, downsampled_lr) in enumerate(test_dataloader):
             print(f"Processing batch {batch_idx+1}/{len(test_dataloader)}...")
             
             original_hr = original_hr.float().to(device)
@@ -550,7 +499,7 @@ def evaluate_stage2_model(config):
                 images_output_dir=images_output_dir,
                 batch_idx=batch_idx,
                 cumulative_idx=cumulative_idx,
-                wavelet='haar',  # You can also try 'db1', 'db2', 'sym2', 'coif1'
+                wavelet='db2',  # You can also try 'db1', 'db2', 'sym2', 'coif1'
                 save_dwt_viz=False  # Set to True to visualize DWT decomposition
             )
             torch.cuda.synchronize()
@@ -560,6 +509,8 @@ def evaluate_stage2_model(config):
             if batch_idx >= warmup_batches:
                 # Time per image in batch
                 inference_times.append((end_time - start_time) / original_hr.size(0))
+
+            fused_hr = fused_hr.to(device)
             
             batch_metrics = calculate_metrics_batch(original_hr, final_hr)
             fused_batch_metrics = calculate_metrics_batch(original_hr, fused_hr)
@@ -612,9 +563,7 @@ def evaluate_stage2_model(config):
             all_metrics["fused_ssim"].extend(fused_batch_metrics["ssim"])
             all_metrics["fused_nmse"].extend(fused_batch_metrics["nmse"])
             all_metrics["fused_lpips"].extend(fused_batch_metrics["lpips"])
-            # Accumulate metrics
-            # for metric_name in all_metrics.keys():
-            #     all_metrics[metric_name].extend(batch_metrics[metric_name])
+           
             
             # Generate visualizations for selected batches
             collected_original.extend([img.cpu() for img in original_hr])
@@ -624,7 +573,7 @@ def evaluate_stage2_model(config):
 
             if batch_idx in random_indices:
                 upsampled_input = F.interpolate(downsampled_lr, size=original_hr.shape[-2:], mode='bicubic', align_corners=False)
-                vis_path = os.path.join(vis_dir, f"residual_evaluation_batch_{batch_idx:03d}.png")
+                vis_path = os.path.join(vis_dir, f"evaluation_batch_{batch_idx:03d}.png")
                 
                 create_evaluation_visualizations(
                     original_hr, final_hr, upsampled_input, 
@@ -638,8 +587,6 @@ def evaluate_stage2_model(config):
     fid_coarse_hr = calculate_fid_batch(collected_original, collected_coarse_hr, eval_dir, device)
     fid_fused_hr = calculate_fid_batch(collected_original, collected_fused_hr, eval_dir, device)
 
-    # print(f"FID Final HR: {fid_final_hr:.4f}")
-    # print(f"FID Coarse HR: {fid_coarse_hr:.4f}")
 
     print("\n[STEP 6/6] Calculating and saving final results...")
     
@@ -712,9 +659,9 @@ def evaluate_stage2_model(config):
 
 if __name__ == '__main__':
     evaluation_config = {
-        'model_path': '/PATH/TO/TRAINED/DIFFUSION/MODEL',
-        'stage1_model_path': '/PATH/TO/TRAINED/STAGE_1/MODEL',
-        'test_csv_path': '/PATH/TO/CSV/FILE/CONTAINING/IMAGE/PATHS',
+        'model_path': 'path/to/your/trained/diffusion_refiner_model.pth',
+        'stage1_model_path': 'path/to/your/trained/stage_1_model.pth',
+        'test_csv_path': 'path/to/your/infer_data.csv',
         'time_emb_dim': 128,
         'out_emb_dim': 512,
         'eval_batch_size': 8,
@@ -724,7 +671,7 @@ if __name__ == '__main__':
         'max_test_items': None,  # Set to None for full evaluation
         'evaluation_seed': 42,
         'num_visualizations': 10,
-        'evaluation_output_dir': '/PATH/TO/OUTPUT/DIRECTORY'
+        'evaluation_output_dir': 'output_dir' 
     }
     
     evaluate_stage2_model(evaluation_config)
