@@ -11,18 +11,13 @@ Official PyTorch implementation of **SAFE-Diff**, a two-stage deep learning pipe
 
 ### Setup
 
-# Clone the repository
+**Clone the repository**
 git clone [https://github.com/nature0012300/SAFE-Diff.git]
-cd SAFE-Diff
 
-# Install core dependencies
-pip install torch torchvision torchaudio
-pip install numpy pandas pillow scikit-image matplotlib lpips pytorch-fid pywt tqdm
-
----
+**Install core dependencies**
+pip install torch torchvision torchaudio numpy pandas pillow scikit-image matplotlib lpips pytorch-fid pywt tqdm
 
 ## 2. Pretrained Models & Inference Data
-
 To reproduce our results or run inference on your own samples, you must download the trained weights and the pre-processed dataset indices.
 
 | Resource | Description | Download Link |
@@ -38,7 +33,6 @@ The system utilizes a CSV-based loading mechanism. You must provide a `.csv` fil
 The CSV file should have a column named `image_path` as shown below:
 
 | image_path |
-| :--- |
 | `/DATA/lits/test_lits/patient_31/slice_90.png` |
 | `/DATA/lits/test_lits/patient_128/slice_100.png` |
 
@@ -46,14 +40,14 @@ The CSV file should have a column named `image_path` as shown below:
 
 ##  3. Configuration & Inference
 
-### Mandatory: Path Configuration
+**Mandatory: Path Configuration**
 Before running the evaluation, you **must** update the local directory paths within `eval_main.py` to point to your specific environment for either **LITS** or **KITS** inference.
 
 1. Open `eval_main.py`.
 2. Locate the configuration section and update the following variables:
 
 
-# Edit these paths in eval_main.py
+**Edit these paths in eval_main.py**
 
 'model_path': 'path/to/trained/diffusion/refiner.pth',
 'stage1_model_path': 'path/to/trained/Stage_1.pth',
