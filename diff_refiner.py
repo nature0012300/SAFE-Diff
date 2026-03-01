@@ -9,22 +9,18 @@ import pandas as pd
 import glob
 import random
 from torch.utils.data import Dataset, DataLoader
-# from torchvision import transforms
 from PIL import Image
 from tqdm import tqdm
-# from transformers import AutoTokenizer, AutoModel
 import matplotlib.pyplot as plt
 from utils import calculate_metrics
-import torch.fft
 
-from typing import List, Tuple
 from torch.optim.lr_scheduler import SequentialLR, LinearLR, ConstantLR, CosineAnnealingLR
 from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 from skimage.metrics import structural_similarity as compare_ssim
 
 import lpips
 from stage_1 import ResidualPredictionNet,de_normalize
-from data_setup import set_seed, create_dataloader, train_dir, val_dir, test_dir, root_dir, device
+from data_setup import set_seed, create_dataloader, device
 
 torch.cuda.empty_cache()
 
@@ -143,11 +139,6 @@ class UNetResNetBlock(nn.Module):
         return self._forward_impl(x, time_emb)
 # 4. THE MAIN  U-NET
 # ==============================================================================
-import math
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from einops import rearrange
 
 class WindowAttention(nn.Module):
     """Window-based multi-head self attention with relative position bias."""
@@ -580,48 +571,6 @@ class NoiseScheduler:
         sqrt_one_minus_alpha_cumprod_t = torch.sqrt(1.0 - self.alphas_cumprod[t]).view(-1, 1, 1, 1).to(x_0.device)
         return sqrt_alpha_cumprod_t * x_0 + sqrt_one_minus_alpha_cumprod_t * noise
 
-# class NoiseScheduler:
-#     def __init__(self, num_timesteps=1000, beta_start=0.0001, beta_end=0.02, device=device):
-#         self.num_timesteps = num_timesteps
-#         self.device = device
-        
-#         # Standard Linear Schedule (used in DDPM / SRDiff)
-#         self.betas = torch.linspace(beta_start, beta_end, num_timesteps).to(device)
-        
-#         self.alphas = 1.0 - self.betas
-#         self.alphas_cumprod = torch.cumprod(self.alphas, dim=0).to(device)
-
-#     def add_noise(self, x_0, noise, t):
-#         # (Keep this function exactly the same as you had it)
-#         sqrt_alpha_cumprod_t = torch.sqrt(self.alphas_cumprod[t]).view(-1, 1, 1, 1).to(x_0.device)
-#         sqrt_one_minus_alpha_cumprod_t = torch.sqrt(1.0 - self.alphas_cumprod[t]).view(-1, 1, 1, 1).to(x_0.device)
-#         return sqrt_alpha_cumprod_t * x_0 + sqrt_one_minus_alpha_cumprod_t * noise
-    
-class GradientLoss(nn.Module):
-    """Computes gradient difference between predicted and target images"""
-    def __init__(self):
-        super().__init__()
-        
-    def forward(self, pred, target):
-        # Compute gradients using Sobel operators
-        # X gradient
-        sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], 
-                               dtype=torch.float32, device=pred.device).view(1, 1, 3, 3)
-        # Y gradient
-        sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], 
-                               dtype=torch.float32, device=pred.device).view(1, 1, 3, 3)
-        
-        # Compute gradients for predicted image
-        pred_grad_x = F.conv2d(pred, sobel_x, padding=1)
-        pred_grad_y = F.conv2d(pred, sobel_y, padding=1)
-        
-        # Compute gradients for target image
-        target_grad_x = F.conv2d(target, sobel_x, padding=1)
-        target_grad_y = F.conv2d(target, sobel_y, padding=1)
-        
-        # L1 loss on gradients
-        loss = F.l1_loss(pred_grad_x, target_grad_x) + F.l1_loss(pred_grad_y, target_grad_y)
-        return loss
 
 def load_stage1_model(checkpoint_path, device):
     """Loads the pre-trained Stage 1 model and sets it to evaluation mode."""
@@ -659,7 +608,7 @@ class MetricsLogger:
     """
     A utility class to log training and validation metrics to a single CSV file.
     """
-    def __init__(self, log_path='Output_Dir/metrics_log.csv'):
+    def __init__(self, log_path='Directory_to_save_outputs/metrics_log.csv'):
         """
         Initializes the logger.
         Args:
@@ -676,7 +625,7 @@ class MetricsLogger:
             with open(self.log_path, 'w', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow([
-                    'epoch', 'phase', 'total_loss', 'diffusion_loss', "recon_loss","freq_loss",
+                    'epoch', 'phase', 'total_loss', 'diffusion_loss', "recon_loss",
                     'lpips_loss', 'psnr', 'ssim', 'nmse'
                 ])
 
@@ -697,34 +646,10 @@ class MetricsLogger:
                 metrics.get('diffusion_loss', float('nan')),
                 metrics.get('lpips_loss', float('nan')),
                 metrics.get('recon_loss', float('nan')),
-                metrics.get('freq_loss', float('nan')),
                 metrics.get('psnr', float('nan')),
                 metrics.get('ssim', float('nan')),
                 metrics.get('nmse', float('nan'))
             ])
-
-def normalize_noise(noise, target_std=1.0):
-    """
-    Normalizes noise to have zero mean and target standard deviation.
-    
-    Args:
-        noise: The noise tensor to normalize
-        target_std: Target standard deviation (default 1.0 for Gaussian)
-    
-    Returns:
-        Normalized noise tensor
-    """
-    # Calculate current statistics
-    noise_mean = noise.mean()
-    noise_std = noise.std()
-    
-    # Normalize to zero mean and unit variance
-    normalized = (noise - noise_mean) / (noise_std + 1e-8)
-    
-    # Scale to target standard deviation
-    normalized = normalized * target_std
-    
-    return normalized
 
 def visualize_batch_s2(model, batch, epoch, device, noise_scheduler,output_dir):
     """
@@ -736,7 +661,7 @@ def visualize_batch_s2(model, batch, epoch, device, noise_scheduler,output_dir):
     os.makedirs(vis_dir, exist_ok=True)
     
     # Unpack the batch and move tensors to the device
-    original_hr, downsampled_lr, _, report_texts = batch
+    original_hr, downsampled_lr = batch
     original_hr = original_hr.float().to(device)
     downsampled_lr = downsampled_lr.float().to(device)
     upsampled_lr = F.interpolate(downsampled_lr, size=original_hr.shape[-2:], mode='bicubic', align_corners=False).to(device)
@@ -748,14 +673,9 @@ def visualize_batch_s2(model, batch, epoch, device, noise_scheduler,output_dir):
         residual_map = model.stage1_model(upsampled_lr).float().to(device)
         coarse_hr = torch.clamp(upsampled_lr + residual_map, -1.0, 1.0)
         # Generate the noisy image that the model will denoise
-        # We use a fixed seed for the noise so the input to the model is the same each epoch
-        # set_seed(42) 
+        
         actual_noise = torch.randn_like(original_hr)
-        # Element-wise multiplication with residual map
-        # blended_noise = 0.7 * gaussian_noise + 0.3 * (gaussian_noise * torch.abs(residual_map))
 
-        # Normalize the modulated noise to maintain Gaussian properties
-        # actual_noise = normalize_noise(blended_noise, target_std=1.0)
         noisy_image = noise_scheduler.add_noise(original_hr, actual_noise, t)
         noisy_input_plot = (noisy_image.cpu() + 1) / 2.0
 
@@ -854,8 +774,8 @@ class FrequencyLoss(nn.Module):
         return self.l1_loss(pred_amp, target_amp)
 
 
-def train_one_epoch_s2(model, dataloader, optimizer, noise_scheduler, criterion_l1, lpips_loss_fn,criterion_char,criterion_freq,
-                     w_char, w_freq,device, epoch, scaler):
+def train_one_epoch_s2(model, dataloader, optimizer, noise_scheduler, criterion_l1, lpips_loss_fn,criterion_char,
+                     w_char,device, epoch, scaler):
     """
     Handles the training logic for one complete epoch with full reproducibility.
     """
@@ -863,14 +783,14 @@ def train_one_epoch_s2(model, dataloader, optimizer, noise_scheduler, criterion_
     model.train()
     model.to(device)
     train_metrics = {
-        "total_loss": [], "diffusion_loss": [], "lpips_loss": [], 'recon_loss': [],'freq_loss': [],
+        "total_loss": [], "diffusion_loss": [], "lpips_loss": [], 'recon_loss': [] ,
         "psnr": [], "ssim": [], "nmse": []
     }
     base_seed = 42  # Base seed for reproducibility
     num_batches = len(dataloader)
     loop = tqdm(enumerate(dataloader), total=num_batches, desc=f"Training Epoch {epoch+1}",mininterval=1.0)
 
-    for batch_idx, (original, downsampled_image,_,report_texts) in loop:
+    for batch_idx, (original, downsampled_image) in loop:
         
         # --- REPRODUCIBILITY STEP ---
         # Set a unique, deterministic seed for this specific training step.
@@ -892,14 +812,11 @@ def train_one_epoch_s2(model, dataloader, optimizer, noise_scheduler, criterion_
         # accumulation_steps = 4
         with torch.amp.autocast('cuda'):
             # --- 1. Diffusion Forward Pass ---
-            # The random operations below are now deterministic for this step across runs.
+        
             t = torch.randint(0,300, (original.shape[0],), device=device)
                
             actual_noise = torch.randn_like(original)
-            # Element-wise multiplication with residual map
-            # blended_noise = 0.7 * gaussian_noise + 0.3 * (gaussian_noise * torch.abs(residual_map))
-            # # Normalize the modulated noise to maintain Gaussian properties
-            # actual_noise = normalize_noise(blended_noise, target_std=1.0)
+            
             noisy_original = noise_scheduler.add_noise(original, actual_noise, t)
     
 
@@ -919,12 +836,11 @@ def train_one_epoch_s2(model, dataloader, optimizer, noise_scheduler, criterion_
 
             lpips_loss = lpips_loss_fn(predicted_hr, original).mean()
             char_loss = criterion_char(predicted_hr, original)
-            freq_loss = criterion_freq(predicted_hr, original)
 
-            total_loss = (1- lpips_weight - w_char) * (diffusion_loss) + (lpips_weight * lpips_loss) + (w_char * char_loss) + (w_freq * freq_loss)
+            total_loss = (1- lpips_weight - w_char) * (diffusion_loss) + (lpips_weight * lpips_loss) + (w_char * char_loss)
 
         if torch.isnan(total_loss) or torch.isinf(total_loss):
-            print(f"⚠️  NaN/Inf loss at batch {batch_idx}, epoch {epoch+1}, skipping batch")
+            print(f"NaN/Inf loss at batch {batch_idx}, epoch {epoch+1}, skipping batch")
             optimizer.zero_grad()
             continue
 
@@ -942,23 +858,15 @@ def train_one_epoch_s2(model, dataloader, optimizer, noise_scheduler, criterion_
         scaler.update()
         optimizer.zero_grad()
         
-     
-            # --- MOVE THE PRINT STATEMENT HERE ---
-            # Also, let's print it less frequently to avoid clutter, e.g., every few accumulation steps
-            # if (batch_idx + 1) % (accumulation_steps * 5) == 0: # Print every 5 optimizer steps
-        if (batch_idx + 1) % (100) == 0: # Print every 5 optimizer steps
+        if (batch_idx + 1) % (100) == 0: 
             print(f"Gradient norm at step {batch_idx+1}: {grad_norm:.4f}")
             # -----------------------------------
             
-            # scaler.step(optimizer)
-            # scaler.update()
-            # optimizer.zero_grad() 
         # --- 5. Update Metrics ---
         train_metrics["total_loss"].append(total_loss.item())
         train_metrics["lpips_loss"].append(lpips_loss.item())
         train_metrics["diffusion_loss"].append(diffusion_loss.item())
         train_metrics["recon_loss"].append(char_loss.item())
-        train_metrics["freq_loss"].append(freq_loss.item())
 
         del predicted_noise, actual_noise
         
@@ -973,8 +881,8 @@ def train_one_epoch_s2(model, dataloader, optimizer, noise_scheduler, criterion_
                 
     return {key: np.mean(val) for key, val in train_metrics.items() if val}
 
-def validate_one_epoch_s2(model, dataloader, noise_scheduler, criterion_l1, lpips_loss_fn,criterion_char,criterion_freq,
-                       w_char,w_freq, device, epoch, base_seed,output_dir):
+def validate_one_epoch_s2(model, dataloader, noise_scheduler, criterion_l1, lpips_loss_fn,criterion_char,
+                       w_char, device, epoch, base_seed,output_dir):
     """
     Handles the validation logic for one complete epoch.
     """
@@ -985,7 +893,6 @@ def validate_one_epoch_s2(model, dataloader, noise_scheduler, criterion_l1, lpip
         "diffusion_loss": [],
         "lpips_loss": [],
         'recon_loss':[],
-        'freq_loss':[],
         "psnr": [],
         "ssim": [],
         "nmse": []
@@ -994,12 +901,8 @@ def validate_one_epoch_s2(model, dataloader, noise_scheduler, criterion_l1, lpip
     num_batches = len(dataloader)
     loop = tqdm(enumerate(dataloader), total=num_batches, desc=f"Validating Epoch {epoch+1}",mininterval=1.0)
 
-    with torch.no_grad(), torch.amp.autocast('cuda'):  # Crucially, no gradients are calculated
-        for batch_idx, (original,downsampled_image, _, report_texts) in loop:
-            
-            # --- REPRODUCIBILITY STEP for stable validation metrics ---
-            # step_seed = base_seed + epoch * num_batches + batch_idx
-            # set_seed(step_seed)
+    with torch.no_grad(), torch.amp.autocast('cuda'): 
+        for batch_idx, (original,downsampled_image) in loop:
 
             original = original.float().to(device) 
             downsampled_image = downsampled_image.float().to(device)
@@ -1007,27 +910,22 @@ def validate_one_epoch_s2(model, dataloader, noise_scheduler, criterion_l1, lpip
                                       size=original.shape[-2:],
                                        mode='bicubic', align_corners=False)
             upsampled_image = upsampled_image.float().to(device)
-            with torch.amp.autocast('cuda'):  # ← ADD autocast (already in no_grad context)
-                residual_map = model.stage1_model(upsampled_image).float()  # ← ADD .float()
+            with torch.amp.autocast('cuda'):  
+                residual_map = model.stage1_model(upsampled_image).float()  
             residual_map = residual_map.to(device)
             coarse_hr = torch.clamp(upsampled_image + residual_map, -1.0, 1.0)
             
             # --- 1. Diffusion Forward Pass ---
             t = torch.randint(0, 300, (original.shape[0],), device=device)
             actual_noise = torch.randn_like(original)
-            # Element-wise multiplication with residual map
-            # blended_noise = 0.7 * gaussian_noise + 0.3 * (gaussian_noise * torch.abs(residual_map))
-            # # Normalize the modulated noise to maintain Gaussian properties
-            # actual_noise = normalize_noise(blended_noise, target_std=1.0)
+       
             noisy_original = noise_scheduler.add_noise(original, actual_noise, t)
-
-            # del gaussian_noise
 
             # --- 2. Model Prediction ---
             predicted_noise = model(noisy_hr_image=noisy_original, downsampled_image=downsampled_image,
                             time_steps=t,residual_map=residual_map,epoch=epoch)
 
-            # --- 3. Loss Calculation (same as training) ---
+            # --- 3. Loss Calculation
             diffusion_loss = criterion_l1(predicted_noise, actual_noise)
 
             # Derive the reconstructed image for LPIPS and image quality metrics
@@ -1040,15 +938,13 @@ def validate_one_epoch_s2(model, dataloader, noise_scheduler, criterion_l1, lpip
 
             lpips_loss = lpips_loss_fn(predicted_hr, original).mean()
             char_loss = criterion_char(predicted_hr, original)
-            freq_loss = criterion_freq(predicted_hr, original)
 
-            total_loss = (1- lpips_weight - w_char) * (diffusion_loss) + (lpips_weight * lpips_loss) + (w_char * char_loss) + (w_freq * freq_loss)
+            total_loss = (1- lpips_weight - w_char) * (diffusion_loss) + (lpips_weight * lpips_loss) + (w_char * char_loss) 
             # --- 4. Update Metrics ---
             val_metrics["total_loss"].append(total_loss.item())
             val_metrics["lpips_loss"].append(lpips_loss.item())
             val_metrics["diffusion_loss"].append(diffusion_loss.item())
             val_metrics["recon_loss"].append(char_loss.item())
-            val_metrics["freq_loss"].append(freq_loss.item())
 
             del predicted_noise, actual_noise
 
@@ -1063,7 +959,6 @@ def validate_one_epoch_s2(model, dataloader, noise_scheduler, criterion_l1, lpip
             if batch_idx % 20 == 0:
                 torch.cuda.empty_cache()
     
-    # set_seed(42)  # Ensure we always pick the same batch for visualization
     try:
         vis_batch = next(iter(dataloader))
         visualize_batch_s2(
@@ -1080,7 +975,7 @@ def validate_one_epoch_s2(model, dataloader, noise_scheduler, criterion_l1, lpip
     return {key: np.mean(val) for key, val in val_metrics.items() if val}
 
 def train_and_validate(config, model, train_dataloader, val_dataloader,scheduler, optimizer, noise_scheduler, 
-                      criterion_l1, lpips_loss_fn,criterion_char,criterion_freq,w_char,w_freq,stage1_model_path,device):
+                      criterion_l1, lpips_loss_fn,criterion_char,w_char,stage1_model_path,device):
     """
     The main orchestrator for the training and validation process, adapted for the
     diffusion model pipeline.
@@ -1106,7 +1001,7 @@ def train_and_validate(config, model, train_dataloader, val_dataloader,scheduler
         current_lr = optimizer.param_groups[0]['lr']
 
         print(f"\n===== Epoch {epoch+1}/{config['num_epochs']} =====")
-        print(f"Learning Rate: {current_lr:.6f}")  # ← ADD THIS LINE
+        print(f"Learning Rate: {current_lr:.6f}")  
     
 
         # --- Training Phase ---
@@ -1118,12 +1013,10 @@ def train_and_validate(config, model, train_dataloader, val_dataloader,scheduler
             criterion_l1=criterion_l1,
             lpips_loss_fn=lpips_loss_fn,
             criterion_char = criterion_char,
-            criterion_freq = criterion_freq,
             w_char= w_char,
-            w_freq=w_freq,
             device=device,
             epoch=epoch,
-            scaler=scaler # A new scaler for each epoch is fine
+            scaler=scaler 
         )
         # Log and store the averaged training metrics for the epoch
         logger.log(epoch + 1, 'train', train_metrics)
@@ -1141,9 +1034,7 @@ def train_and_validate(config, model, train_dataloader, val_dataloader,scheduler
             criterion_l1=criterion_l1,
             lpips_loss_fn=lpips_loss_fn,
             criterion_char = criterion_char,
-            criterion_freq = criterion_freq,
             w_char=w_char,
-            w_freq=w_freq,
             device=device,
             epoch=epoch,
             base_seed=config['base_seed'],
@@ -1158,10 +1049,8 @@ def train_and_validate(config, model, train_dataloader, val_dataloader,scheduler
         results_summary["val_nmse"].append(val_metrics['nmse'])
         print(f"\nVal Metrics:  Loss={val_metrics['total_loss']:.4f}, PSNR={val_metrics['psnr']:.2f}, SSIM={val_metrics['ssim']:.4f}, NMSE={val_metrics['nmse']:.4f}")
 
-        # --- Early Stopping and Checkpointing ---
-        # The EarlyStopping object will decide whether to save the model
+       
         avg_val_loss = val_metrics['total_loss']
-        # Check if this is the best model so far
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             best_epoch = epoch + 1
@@ -1170,17 +1059,13 @@ def train_and_validate(config, model, train_dataloader, val_dataloader,scheduler
             torch.save(model.state_dict(), best_model_path)
             print(f" New best model saved! Epoch {best_epoch}, Val Loss: {best_val_loss:.4f}")
         
-        # if early_stopping.early_stop:
-        #     print("Early stopping triggered. Halting training.")
-        #     break
         if (epoch + 1) % 10 == 0:  # Save every 10 epochs
             checkpoint_path = os.path.join(config['output_dir'], f'model_epoch_{epoch+1}.pth')
             torch.save(model.state_dict(), checkpoint_path)
             print(f"Model saved at epoch {epoch+1}: {checkpoint_path}")   
 
     print("\n--- Training Finished ---")
-    # if early_stopping.early_stop:
-    #     print(f"Stopped early at epoch {epoch+1}.")
+   
     print(f"Best model (Epoch {best_epoch}, Val Loss: {best_val_loss:.4f}) saved to: {os.path.join(config['output_dir'], 'best_model.pth')}")
     print(f"All epoch metrics logged to: {config['log_path']}")
     
@@ -1197,7 +1082,7 @@ def plot_metrics_from_csv(csv_path, output_dir):
     """
     print(f"Reading metrics from {csv_path}...")
     column_names = [
-        'epoch', 'phase', 'total_loss', 'diffusion_loss','recon_loss','freq_loss', 
+        'epoch', 'phase', 'total_loss', 'diffusion_loss','recon_loss', 
         'lpips_loss', 'psnr', 'ssim', 'nmse']
     try:
         # Tell pandas to use the names you provided and that there is no header row in the file.
@@ -1218,9 +1103,8 @@ def plot_metrics_from_csv(csv_path, output_dir):
     metrics_to_plot = {
         "Total Loss": "total_loss",
         "Diffusion Loss": "diffusion_loss", 
-        "LPIPS Loss": "lpips_loss",          
-        "Reconstruction Loss": "recon_loss",    
-        "Frequency Loss": "freq_loss",
+        "LPIPS Loss": "lpips_loss",         
+        "Reconstruction Loss": "recon_loss",     
         "PSNR (dB)": "psnr",
         "SSIM": "ssim",
         "NMSE": "nmse"
@@ -1264,14 +1148,13 @@ if __name__ == '__main__':
         "base_seed": 42,
         "learning_rate": 1.2e-4,
         "w_char": 0.4,
-        "w_freq":0.0,
         "time_emb_dim": 128, 
         "emb_dim": 512,       # Must match ReportEncoder output
         "out_emb_dim": 512,  # Dimension for cross-attention
-        "stage1_model_path": "/PATH/TO/TRAINED/STAGE_1", 
-        "output_dir": "Output_Dir",  # Directory to save outputs
-        "log_path": "Output_Dir/metrics_log_s2.csv",
-        "save_path": "Output_Dir/stage2_model_final.pth"
+        "stage1_model_path": "path/to/trained/stage_1.pth", 
+        "output_dir": "Directory_to_save_outputs",  
+        "log_path": "Directory_to_save_outputs/metrics_log_s2.csv",
+        "save_path": "Directory_to_save_outputs/stage2_model_final.pth"
     }
     os.makedirs(config['output_dir'], exist_ok=True)
 
@@ -1279,13 +1162,11 @@ if __name__ == '__main__':
     set_seed(config['base_seed'])
     print(f"Using device: {device}")
 
-    train_dataloader = create_dataloader(csv_file="/home/m24ma2010/Kits/train_data.csv",
+    train_dataloader = create_dataloader(csv_file="path/to/your/train_data.csv",
                                         max_items = None, batch_size=config['batch_size'], shuffle=True)
-    val_dataloader = create_dataloader(csv_file="/home/m24ma2010/Kits/validation_data.csv",
+    val_dataloader = create_dataloader(csv_file="path/to/your/val_data.csv",
                                         max_items = None, batch_size=config['batch_size'], shuffle=False)
-    
-    # test_dataloader = create_dataloader(csv_file=os.path.join(DATA_DIR, 'test.csv'), batch_size=config['batch_size'], shuffle=False)
-    
+        
     # --- 4. Initialize Models, Optimizer, and Loss Functions ---
     print("--- Initializing models and training components ---")
     model = Stage2Model(
@@ -1297,14 +1178,12 @@ if __name__ == '__main__':
 
     torch.cuda.empty_cache()
     
-    if hasattr(torch, 'compile'):  # Check PyTorch version supports it
+    if hasattr(torch, 'compile'):
         print(" Compiling model with torch.compile()...")
         model = torch.compile(model, mode='reduce-overhead')
         print("✓ Model compiled successfully! First epoch will be slower due to compilation.")
     else:
         print(" torch.compile() not available (requires PyTorch 2.0+). Skipping compilation.")
-
-    # Note: Using placeholder for MedGemma as the real one isn't provided
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config['learning_rate'],weight_decay=0.01)
 
@@ -1317,8 +1196,8 @@ if __name__ == '__main__':
 
     decay_scheduler = CosineAnnealingLR(
         optimizer,
-        T_max=config['num_epochs'] - 5,      # Decay from epoch 50-120
-        eta_min=8e-6   # Still strong at the end
+        T_max=config['num_epochs'] - 5,     
+        eta_min=8e-6  
     )
 
     scheduler = SequentialLR(
@@ -1336,7 +1215,6 @@ if __name__ == '__main__':
 
     # 3. New Refiner Losses
     criterion_char = CharbonnierLoss().to(device)
-    criterion_freq = FrequencyLoss().to(device)
 
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -1353,9 +1231,7 @@ if __name__ == '__main__':
         criterion_l1=criterion_l1,
         lpips_loss_fn=lpips_loss_fn,
         criterion_char=criterion_char,
-        criterion_freq=criterion_freq,
         w_char=config['w_char'],
-        w_freq=config['w_freq'],
         stage1_model_path=config['stage1_model_path'],
         device=device
     )
@@ -1366,5 +1242,6 @@ if __name__ == '__main__':
         csv_path=config['log_path'], 
         output_dir=config['output_dir']
     )
-    
+
     print("\n--- Pipeline Complete ---")
+
