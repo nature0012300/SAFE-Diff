@@ -18,7 +18,7 @@ git clone [https://github.com/nature0012300/SAFE-Diff.git]
 pip install torch torchvision torchaudio numpy pandas pillow scikit-image matplotlib lpips pytorch-fid pywt tqdm
 
 ## 2. Pretrained Models & Inference Data
-To reproduce our results or run inference on your own samples, you must download the trained weights and the pre-processed dataset indices.
+To reproduce our results , you must download the trained weights and the pre-processed dataset indices.
 
 | Resource | Description | Download Link |
 | :--- | :--- | :--- |
