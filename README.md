@@ -2,8 +2,6 @@
 
 Official PyTorch implementation of **SAFE-Diff**, a two-stage deep learning pipeline for super-resolution enhancement of low-resolution CT scan images.
 
----
-
 ##  1. Installation & Setup
 
 ### Requirements
@@ -12,7 +10,7 @@ Official PyTorch implementation of **SAFE-Diff**, a two-stage deep learning pipe
 * **Framework:** PyTorch 1.12+
 
 ### Setup
-```bash
+
 # Clone the repository
 git clone [https://github.com/nature0012300/SAFE-Diff.git]
 cd SAFE-Diff
@@ -54,7 +52,7 @@ Before running the evaluation, you **must** update the local directory paths wit
 1. Open `eval_main.py`.
 2. Locate the configuration section and update the following variables:
 
-```python
+
 # Edit these paths in eval_main.py
 
 'model_path': 'path/to/trained/diffusion/refiner.pth',
