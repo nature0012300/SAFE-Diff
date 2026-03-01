@@ -2,8 +2,6 @@ import os
 import random
 import numpy as np
 import torch
-import torch.optim as optim
-import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, Subset
 import torchvision.transforms as transforms
 from torchvision.transforms import InterpolationMode
@@ -11,17 +9,16 @@ from torchvision.transforms import functional as TF
 from PIL import Image
 import pandas as pd
 from pathlib import Path
-import matplotlib.pyplot as plt
 
 torch.cuda.empty_cache()
 
-train_dir = '/DATA2/lits/train_lits'
-val_dir = '/DATA2/lits/val_lits'
-test_dir = '/DATA2/lits/test_lits'
-root_dir = 'Root_Dir'
+train_dir = '/DATA/lits/train_lits'
+val_dir = '/DATA/lits/val_lits'
+test_dir = '/DATA/lits/test_lits'
+root_dir = 'home/SAFE-Diff'
 
 # Set Device
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 # device = "cpu"
 print(f"Device is: {device}")
 
@@ -29,7 +26,6 @@ print(f"Device is: {device}")
 CONFIG = {
     'hr_size': (512, 512),
     'lr_size': (128, 128),
-    'lr_size_mid': (256, 256),
     'seed': 42
 }
 
@@ -66,20 +62,6 @@ def save_sample_images(images, prefix, image_type, save_dir='sample_image_displa
         else:
             print(f"Warning: Unexpected image dimensions for saving: {image_to_save.shape}")
 
-class RandomResize(object):
-    """
-    A custom transform that resizes an image using a randomly selected interpolation method.
-    """
-    def __init__(self, size):
-        self.size = size
-        # Define the list of interpolation methods to choose from
-        self.methods = [InterpolationMode.BILINEAR, InterpolationMode.BICUBIC, InterpolationMode.BOX]
-
-    def __call__(self, img):
-        # Randomly select one interpolation method for each image
-        method = random.choice(self.methods)
-        # Use the functional API for resizing, which is more flexible
-        return TF.resize(img, self.size, interpolation=method)
 
 class LitsSliceDatasetCSV(Dataset):
     """
@@ -89,7 +71,7 @@ class LitsSliceDatasetCSV(Dataset):
     Each __getitem__ call returns (HR_image, LR_clean) for a single slice.
     """
     
-    def __init__(self, csv_file, hr_size=(512, 512), lr_size=(128,128),lr_size_mid=(256,256),
+    def __init__(self, csv_file, hr_size=(512, 512), lr_size=(128,128),
                  image_path_column='image_path',root_dir=None):
         """
         Initialize the dataset.
@@ -104,7 +86,6 @@ class LitsSliceDatasetCSV(Dataset):
         self.csv_file = csv_file
         self.hr_size = hr_size
         self.lr_size = lr_size
-        self.lr_size_mid = lr_size_mid
         self.image_path_column = image_path_column
         self.root_dir = Path(root_dir) if root_dir else None
         
@@ -119,9 +100,6 @@ class LitsSliceDatasetCSV(Dataset):
         ])
         
         self.lr_transform = transforms.Compose([
-            # RandomResize(self.lr_size_mid),
-            # transforms.GaussianBlur(kernel_size=(5, 5), sigma=(1.0, 2.0)), 
-            # RandomResize(self.lr_size),
             transforms.Resize(self.lr_size, interpolation=InterpolationMode.BICUBIC),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5], std=[0.5])
@@ -230,14 +208,6 @@ class LitsSliceDatasetCSV(Dataset):
         image = np.clip(image, min_bound, max_bound)
         return (image - min_bound) / (max_bound - min_bound)
 
-    def get_sample_info(self, idx):
-        """Get additional information about a sample (useful for debugging)."""
-        row = self.data_df.iloc[idx]
-        return {
-            'image_path': self._get_full_image_path(row[self.image_path_column]),
-            'csv_index': idx
-        }
-
 def custom_collate_fn(batch):
     """
     Custom collate function that handles None values from failed image loads.
@@ -266,7 +236,7 @@ def custom_collate_fn(batch):
 
 def create_dataloader(csv_file, batch_size=4, max_items=None, 
                          seed=42, shuffle=True, num_workers=4, pin_memory=True,persistent_workers=True, 
-                         hr_size=(512, 512), lr_size=(128,128),lr_size_mid=(256,256),
+                         hr_size=(512, 512), lr_size=(128,128),
                          image_path_column='image_path', drop_last=True,
                          root_dir=None):
     """
@@ -295,7 +265,6 @@ def create_dataloader(csv_file, batch_size=4, max_items=None,
         csv_file=csv_file,
         hr_size=hr_size,
         lr_size=lr_size,
-        lr_size_mid=lr_size_mid,
         image_path_column=image_path_column,
         root_dir=root_dir
     )
