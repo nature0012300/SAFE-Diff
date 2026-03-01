@@ -51,11 +51,8 @@ Before running the evaluation, you **must** update the local directory paths wit
 **Edit these paths in eval_main.py**
 
 'model_path': 'path/to/trained/diffusion/refiner.pth',
-
 'stage1_model_path': 'path/to/trained/Stage_1.pth',
-
 'test_csv_path': "path/to/your/metadata.csv",
-
 evaluation_output_dir = "./results/inference_outputs/"
 
 
