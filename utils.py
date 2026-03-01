@@ -1,24 +1,14 @@
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import os
-import math
-import csv
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-import random
 from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 from skimage.metrics import structural_similarity as compare_ssim
-from typing import List, Tuple
-import lpips
 from pytorch_fid import fid_score
 import shutil
 from PIL import Image
 
 
-from data_setup_final import set_seed, create_dataloader, device
+from data_setup import  device
 
 def calculate_metrics(original, reconstructed):
     """
@@ -48,11 +38,6 @@ def calculate_metrics(original, reconstructed):
     orig_min, orig_max = np.min(original), np.max(original)
     recon_min, recon_max = np.min(reconstructed), np.max(reconstructed)
 
-    # if orig_max > 1.0 or orig_min < -1.0:
-    #     print(f"Warning: Original image values outside expected range [-1,1]: min={orig_min}, max={orig_max}")
-    # if recon_max > 1.0 or recon_min < -1.0:
-    #     print(f"Warning: Reconstructed image values outside expected range [-1,1]: min={recon_min}, max={recon_max}")
-
     #  Convert back from [-1,1] → [0,1] before computing PSNR/SSIM
     original = (original + 1) / 2
     reconstructed = (reconstructed + 1) / 2
@@ -68,7 +53,7 @@ def calculate_metrics(original, reconstructed):
         # Calculate SSIM
         ssim = compare_ssim(original, reconstructed, 
                           data_range=1.0, 
-                          multichannel=False,
+                          channel_axis=None, 
                           gaussian_weights=True, 
                           sigma=1.5,
                           use_sample_covariance=False)
