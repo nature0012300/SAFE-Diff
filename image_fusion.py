@@ -3,6 +3,9 @@ import os
 from PIL import Image
 import numpy as np
 from tqdm import tqdm
+import pywt
+import numpy as np
+from PIL import Image
 
 def save_images_to_directories(original_hr, coarse_hr, final_hr,upsampled_lr, output_base_dir, batch_idx, start_idx=0):
     """
@@ -67,145 +70,60 @@ def save_images_to_directories(original_hr, coarse_hr, final_hr,upsampled_lr, ou
     return start_idx + batch_size
 
 
-import torch
-import pywt
-import numpy as np
-from PIL import Image
-import os
-
-# def perform_dwt_fusion(stage1_output, final_hr, wavelet='haar'):
-#     """
-#     Perform DWT-based fusion:
-#     - Use LL (low frequency) band from stage_1 output
-#     - Use LH, HL, HH (high frequency) bands from final_hr
-    
-#     Args:
-#         stage1_output: Tensor [B, C, H, W] - Stage 1 coarse HR output
-#         final_hr: Tensor [B, C, H, W] - Stage 2 final HR output
-#         wavelet: Wavelet type (default: 'haar', can use 'db1', 'db2', 'sym2', etc.)
-    
-#     Returns:
-#         fused_hr: Tensor [B, C, H, W] - Fused HR image
-#     """
-#     batch_size, channels, height, width = stage1_output.shape
-#     batch_size = 2
-#     # Initialize output tensor
-#     fused_hr = torch.zeros_like(stage1_output)
-    
-#     # Process each image in batch
-#     for b in range(batch_size):
-#         # Process each channel separately
-#         for c in range(channels):
-#             # Convert to numpy for pywt processing
-#             stage1_np = stage1_output[b, c].cpu().detach().numpy()
-#             final_np = final_hr[b, c].cpu().detach().numpy()
-            
-#             # Perform 2D DWT on both images
-#             # Returns (LL, (LH, HL, HH))
-#             coeffs_stage1 = pywt.dwt2(stage1_np, wavelet)
-#             coeffs_final = pywt.dwt2(final_np, wavelet)
-            
-#             # Extract components
-#             LL_stage1, (LH_stage1, HL_stage1, HH_stage1) = coeffs_stage1
-#             LL_final, (LH_final, HL_final, HH_final) = coeffs_final
-            
-#             # Fusion strategy:
-#             # - LL from stage_1 (low frequency content)
-#             # - LH, HL, HH from final_hr (high frequency details)
-#             fused_coeffs = (LL_stage1, (LH_final, HL_final, HH_final))
-            
-#             # Perform inverse DWT to reconstruct fused image
-#             fused_np = pywt.idwt2(fused_coeffs, wavelet)
-            
-#             # Handle size mismatch due to DWT/IDWT (crop or pad if needed)
-#             if fused_np.shape != stage1_np.shape:
-#                 # Crop to original size if larger
-#                 fused_np = fused_np[:height, :width]
-            
-#             # Convert back to tensor
-#             fused_hr[b, c] = torch.from_numpy(fused_np).to(stage1_output.device)
-    
-#     return fused_hr
-
-
-def perform_dwt_fusion(stage1_output, final_hr, wavelet='haar'):
+def perform_swt_fusion(stage1_output, final_hr, wavelet='db2'):
     """
-    Perform 2-level DWT-based fusion:
-    - Decompose both images using 2-level DWT
-    - Replace only the 2nd level LL band from stage1_output
-    - Keep all other bands (1st level LH/HL/HH and 2nd level LH/HL/HH) from final_hr
+    Surgical 2-level SWT Fusion:
+    - LL2 (Coarsest Approximation) -> From stage1_output (Anatomy)
+    - Everything else -> From final_hr (Texture/Refined details)
     
     Args:
-        stage1_output: Tensor [B, C, H, W] - Stage 1 coarse HR output
-        final_hr: Tensor [B, C, H, W] - Stage 2 final HR output
-        wavelet: Wavelet type (default: 'haar', can use 'db1', 'db2', 'sym2', etc.)
-        
-    Returns:
-        fused_hr: Tensor [B, C, H, W] - Fused HR image
+        stage1_output : Tensor [B, C, 512, 512]
+        final_hr      : Tensor [B, C, 512, 512]
+        wavelet       : Wavelet type ('db2', 'sym2', etc.)
     """
-    import pywt
-    import torch
-    
     batch_size, channels, height, width = stage1_output.shape
-    
-    # Initialize output tensor
     fused_hr = torch.zeros_like(stage1_output)
     
-    # Process each image in batch
     for b in range(batch_size):
-        # Process each channel separately
         for c in range(channels):
-            # Convert to numpy for pywt processing
-            stage1_np = stage1_output[b, c].cpu().detach().numpy()
-            final_np = final_hr[b, c].cpu().detach().numpy()
+            # Convert to NumPy (CPU processing)
+            s1_np = stage1_output[b, c].cpu().detach().float().numpy()
+            f2_np = final_hr[b, c].cpu().detach().float().numpy()
             
-            # Perform 2-level DWT on both images
-            # Level 1 decomposition
-            coeffs_stage1_L1 = pywt.dwt2(stage1_np, wavelet)
-            coeffs_final_L1 = pywt.dwt2(final_np, wavelet)
+            # SWT2 returns: [ (cA2, (cH2, cV2, cD2)), (cA1, (cH1, cV1, cD1)) ]
+            coeffs_s1 = pywt.swt2(s1_np, wavelet, level=2)
+            coeffs_f2 = pywt.swt2(f2_np, wavelet, level=2)
             
-            # Extract Level 1 components
-            LL_stage1_L1, (LH_stage1_L1, HL_stage1_L1, HH_stage1_L1) = coeffs_stage1_L1
-            LL_final_L1, (LH_final_L1, HL_final_L1, HH_final_L1) = coeffs_final_L1
+            # --- Unpack Level 2 (Coarsest) ---
+            cA2_s1, (cH2_s1, cV2_s1, cD2_s1) = coeffs_s1[0]
+            cA2_f2, (cH2_f2, cV2_f2, cD2_f2) = coeffs_f2[0]
             
-            # Level 2 decomposition (decompose the LL band from Level 1)
-            coeffs_stage1_L2 = pywt.dwt2(LL_stage1_L1, wavelet)
-            coeffs_final_L2 = pywt.dwt2(LL_final_L1, wavelet)
+            # --- Unpack Level 1 (Finest) ---
+            cA1_s1, (cH1_s1, cV1_s1, cD1_s1) = coeffs_s1[1]
+            cA1_f2, (cH1_f2, cV1_f2, cD1_f2) = coeffs_f2[1]
             
-            # Extract Level 2 components
-            LL_stage1_L2, (LH_stage1_L2, HL_stage1_L2, HH_stage1_L2) = coeffs_stage1_L2
-            LL_final_L2, (LH_final_L2, HL_final_L2, HH_final_L2) = coeffs_final_L2
+            # --- FUSION STRATEGY ---
+            # 1. Level 2: Take ONLY LL2 from Stage 1. Take High-Freqs (H, V, D) from Stage 2.
+            fused_L2 = (cA2_s1, (cH2_f2, cV2_f2, cD2_f2))
             
-            # Fusion strategy:
-            # - Level 2 LL from stage1_output (deepest low frequency)
-            # - Level 2 LH, HL, HH from final_hr (high frequency at level 2)
-            fused_coeffs_L2 = (LL_stage1_L2, (LH_final_L2, HL_final_L2, HH_final_L2))
+            # 2. Level 1: Take EVERYTHING from Stage 2.
+            # (cA1 from stage 2 is the "mid-range" approximation that fits stage 2 textures)
+            fused_L1 = (cA1_f2, (cH1_f2, cV1_f2, cD1_f2))
             
-            # Reconstruct Level 1 LL band from fused Level 2 coefficients
-            fused_LL_L1 = pywt.idwt2(fused_coeffs_L2, wavelet)
+            # Combine into the list format required for ISWT
+            fused_coeffs = [fused_L2, fused_L1]
             
-            # Handle size mismatch for Level 1 LL reconstruction
-            if fused_LL_L1.shape != LL_final_L1.shape:
-                # Crop to match the expected size
-                h_L1, w_L1 = LL_final_L1.shape
-                fused_LL_L1 = fused_LL_L1[:h_L1, :w_L1]
+            # Reconstruction
+            fused_np = pywt.iswt2(fused_coeffs, wavelet)
             
-            # Now create Level 1 fused coefficients:
-            # - Fused LL from above (which contains stage1's L2 LL)
-            # - LH, HL, HH from final_hr's Level 1
-            fused_coeffs_L1 = (fused_LL_L1, (LH_final_L1, HL_final_L1, HH_final_L1))
+            # Back to Tensor
+            fused_hr[b, c] = torch.from_numpy(fused_np).to(
+                device=stage1_output.device, 
+                dtype=stage1_output.dtype
+            )
             
-            # Perform inverse DWT to reconstruct final fused image
-            fused_np = pywt.idwt2(fused_coeffs_L1, wavelet)
-            
-            # Handle size mismatch due to DWT/IDWT (crop to original size if needed)
-            if fused_np.shape != stage1_np.shape:
-                fused_np = fused_np[:height, :width]
-            
-            # Convert back to tensor
-            fused_hr[b, c] = torch.from_numpy(fused_np).to(stage1_output.device)
-    
     return fused_hr
+
 
 def save_fused_images(fused_hr, output_base_dir, batch_idx, start_idx=0):
     """
@@ -265,7 +183,7 @@ def visualize_dwt_decomposition(image_tensor, save_path, title="DWT Decompositio
     img_np = image_tensor[0].cpu().detach().numpy()
     
     # Perform DWT
-    coeffs = pywt.dwt2(img_np, 'haar')
+    coeffs = pywt.dwt2(img_np, 'db2')
     LL, (LH, HL, HH) = coeffs
     
     # Create visualization
@@ -292,11 +210,9 @@ def visualize_dwt_decomposition(image_tensor, save_path, title="DWT Decompositio
     plt.savefig(save_path, dpi=600, bbox_inches='tight')
     plt.close()
 
-
-# Integration function for your evaluation loop
 def process_and_save_with_fusion(original_hr, coarse_hr, final_hr,upsampled_lr, 
                                   images_output_dir, batch_idx, cumulative_idx,
-                                  wavelet='haar', save_dwt_viz=False):
+                                  wavelet='db2', save_dwt_viz=False):
     """
     Complete pipeline: Save original/stage_1/final_hr + perform DWT fusion + save fused_hr
     
@@ -327,7 +243,7 @@ def process_and_save_with_fusion(original_hr, coarse_hr, final_hr,upsampled_lr,
     
     # Step 2: Perform DWT fusion
     print(f"  -> Performing DWT fusion (wavelet={wavelet})...")
-    fused_hr = perform_dwt_fusion(coarse_hr, final_hr, wavelet=wavelet)
+    fused_hr = perform_swt_fusion(coarse_hr, final_hr, wavelet=wavelet)
     
     # Step 3: Save fused images
     save_fused_images(
@@ -337,7 +253,7 @@ def process_and_save_with_fusion(original_hr, coarse_hr, final_hr,upsampled_lr,
         start_idx=cumulative_idx - original_hr.shape[0]  # Use same indices
     )
     
-    # Optional: Save DWT decomposition visualizations for first batch
+    # Save SWT decomposition visualizations if want to visulaize the decomposition
     if save_dwt_viz and batch_idx == 0:
         viz_dir = os.path.join(images_output_dir, 'dwt_visualizations')
         os.makedirs(viz_dir, exist_ok=True)
@@ -360,34 +276,3 @@ def process_and_save_with_fusion(original_hr, coarse_hr, final_hr,upsampled_lr,
         print(f"  -> DWT visualizations saved to {viz_dir}")
     
     return cumulative_idx, fused_hr
-
-
-# Example usage in your evaluation loop:
-"""
-Replace this line in your code:
-
-    cumulative_idx = save_images_to_directories(
-        original_hr=original_hr,
-        coarse_hr=coarse_hr,
-        final_hr=final_hr,
-        output_base_dir=images_output_dir,
-        batch_idx=batch_idx,
-        start_idx=cumulative_idx
-    )
-
-With:
-
-    cumulative_idx, fused_hr = process_and_save_with_fusion(
-        original_hr=original_hr,
-        coarse_hr=coarse_hr,
-        final_hr=final_hr,
-        images_output_dir=images_output_dir,
-        batch_idx=batch_idx,
-        cumulative_idx=cumulative_idx,
-        wavelet='haar',  # Can also try 'db1', 'db2', 'sym2', 'coif1'
-        save_dwt_viz=True  # Set to True to see DWT decomposition
-    )
-    
-    # Optional: Calculate metrics for fused_hr too
-    fused_metrics = calculate_metrics_batch(original_hr, fused_hr)
-"""
