@@ -33,7 +33,7 @@ The system utilizes a CSV-based loading mechanism. You must provide a `.csv` fil
 The CSV file should have a column named `image_path` as shown below:
 
 | image_path |
-| :--- |
+C
 | `/DATA/lits/test_lits/patient_31/slice_90.png` |
 | `/DATA/lits/test_lits/patient_128/slice_100.png` |
 
@@ -41,7 +41,7 @@ The CSV file should have a column named `image_path` as shown below:
 
 ##  3. Configuration & Inference
 
-**Mandatory: Path Configuration**
+**Path Configuration**
 Before running the evaluation, you **must** update the local directory paths within `eval_main.py` to point to your specific environment for either **LITS** or **KITS** inference.
 
 1. Open `eval_main.py`.
@@ -49,11 +49,11 @@ Before running the evaluation, you **must** update the local directory paths wit
 
 
 **Edit these paths in eval_main.py**
-
-'model_path': 'path/to/trained/diffusion/refiner.pth',
-'stage1_model_path': 'path/to/trained/Stage_1.pth',
-'test_csv_path': "path/to/your/metadata.csv",
-evaluation_output_dir = "./results/inference_outputs/"
-
+| :--- |
+|'model_path': 'path/to/trained/diffusion/refiner.pth'|
+|'stage1_model_path': 'path/to/trained/Stage_1.pth'|
+|'test_csv_path': "path/to/your/metadata.csv"|
+|'evaluation_output_dir' = "./results/inference_outputs/"|
+---
 
 
